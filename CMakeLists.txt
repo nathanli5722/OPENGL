@@ -9,6 +9,7 @@ target_sources(opengl_app
     PUBLIC
         FILE_SET CXX_MODULES FILES
             src/window.cppm
+            src/buffer.cppm
             
 )
 target_sources(opengl_app
