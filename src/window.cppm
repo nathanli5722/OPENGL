@@ -1,5 +1,6 @@
 module;
 
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include "glad/glad.h"
@@ -12,20 +13,18 @@ export class Window {
   private:
     GLFWwindow* window;
     int width, height;
-    void (*processInput)(GLFWwindow *window);
+    std::function<void(GLFWwindow*, float)> inputCallback;
 
     static void framebuffer_size_callback
                                     (GLFWwindow* window, int width, int height)
     {
         glViewport(0, 0, width, height);
-    }  
+    }
   public:
-    Window(void (*pInput)(GLFWwindow *window) = nullptr,
-           int t_width = 800, int t_height = 600, 
-           std::string name = "window") 
+    Window(int t_width = 800, int t_height = 600,
+           std::string name = "window")
 
-           : processInput{pInput}, 
-             width{t_width}, 
+           : width{t_width},
              height{t_height}
     {
       init(name);
@@ -51,22 +50,35 @@ export class Window {
       glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);  
     }
 
-    void renderLoop(void(*perloop)(GLFWwindow* window)) {
+    // Registers a callback invoked once per frame, before rendering, with
+    // that frame's deltaTime — for polling input (glfwGetKey) and updating
+    // scene state such as a Camera. Kept separate from renderLoop's lambda
+    // so that one stays rendering-only.
+    void setInputCallback(std::function<void(GLFWwindow*, float)> callback) {
+      inputCallback = std::move(callback);
+    }
+
+    template <typename F>
+    void renderLoop(F&& perloop) {
+      float lastFrame = 0.0f;
       while(!glfwWindowShouldClose(window))
       {
-        // input
-        if (processInput)
-          processInput(window);
+        float currentFrame = static_cast<float>(glfwGetTime());
+        float deltaTime = currentFrame - lastFrame;
+        lastFrame = currentFrame;
+
+        if (inputCallback)
+          inputCallback(window, deltaTime);
 
         glClear(GL_COLOR_BUFFER_BIT);
 
-        perloop(window);
+        perloop(window, deltaTime);
 
 
         // show buffer
         glfwSwapBuffers(window);
-        glfwPollEvents();    
+        glfwPollEvents();
       }
-      
+
     }
 };
