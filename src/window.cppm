@@ -46,8 +46,10 @@ export class Window {
       if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
         throw std::exception();
       glViewport(0, 0, width, height);
+      glEnable(GL_DEPTH_TEST);
 
       glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);  
+
     }
 
     // Registers a callback invoked once per frame, before rendering, with
@@ -70,7 +72,7 @@ export class Window {
         if (inputCallback)
           inputCallback(window, deltaTime);
 
-        glClear(GL_COLOR_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         perloop(window, deltaTime);
 

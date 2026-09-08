@@ -74,8 +74,7 @@ int main() {
         };
         VertexBuffer<PosNormalVertex> vertexBuffer(cubeVertices, cubeIndices, layout);
 
-        Shader shader(PROJECT_SOURCE_DIR "/examples/3_phong_lighting/vertex.vert",
-            PROJECT_SOURCE_DIR "/examples/3_phong_lighting/fragment.frag");
+        Shader shader(DEMO_DIR "/vertex.vert", DEMO_DIR "/fragment.frag");
 
         Camera camera(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f),
                       glm::vec3(0.0f, 1.0f, 0.0f), 45.0f, width / height, 0.1f, 100.0f);

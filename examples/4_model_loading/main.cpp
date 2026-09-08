@@ -14,10 +14,9 @@ int main() {
     try {
         Window window(width, height, "Model Loading");
 
-        Model sceneModel = loadModel(PROJECT_SOURCE_DIR "/examples/4_model_loading/assets/cube.obj");
+        Model sceneModel = loadModel(DEMO_DIR "/assets/cube.obj");
 
-        Shader shader(PROJECT_SOURCE_DIR "/examples/4_model_loading/vertex.vert",
-            PROJECT_SOURCE_DIR "/examples/4_model_loading/fragment.frag");
+        Shader shader(DEMO_DIR "/vertex.vert", DEMO_DIR "/fragment.frag");
 
         Camera camera(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f),
                       glm::vec3(0.0f, 1.0f, 0.0f), 45.0f, width / height, 0.1f, 100.0f);
@@ -34,12 +33,11 @@ int main() {
             shader.use();
             shader.setMat4("projection", camera.getProjectionMatrix());
             shader.setMat4("view", camera.getViewMatrix());
-            shader.setMat4("model", modelMat);
 
             shader.setVec3("lightPositions[0]", lightPos);
             shader.setVec3("lightColors[0]", lightColor);
 
-            sceneModel.draw(shader);
+            sceneModel.draw(shader, modelMat);
         });
     } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << std::endl;

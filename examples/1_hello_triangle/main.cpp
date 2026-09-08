@@ -25,8 +25,7 @@ int main() {
             {0, 3, offsetof(VertexData, x)},
         };
         VertexBuffer<VertexData> vertexBuffer(vertices, indices, layout);
-        Shader shader(PROJECT_SOURCE_DIR "/examples/1_hello_triangle/vertex.vert",
-            PROJECT_SOURCE_DIR "/examples/1_hello_triangle/fragment.frag");
+        Shader shader(DEMO_DIR "/vertex.vert", DEMO_DIR "/fragment.frag");
 
         window.renderLoop([&](GLFWwindow*, float) {
             shader.use();

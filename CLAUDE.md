@@ -29,6 +29,14 @@ cmake --build build --target 2_perspective
 
 Demos are windowed GLFW/OpenGL apps requiring a live display — there's no headless way to verify a change beyond "it builds and doesn't throw on startup." Shader/asset paths are resolved via the `PROJECT_SOURCE_DIR` compile definition (an absolute path baked in at configure time), so executables work from any working directory, not just the repo root.
 
+For demos loading large/high-res assets (e.g. `7_PBR`'s glTF models), the unoptimized `clang-debug` build can make texture decoding and per-vertex processing noticeably slow. A `clang-release` preset (same toolchain, `CMAKE_BUILD_TYPE=Release`) builds into `build/release` instead, so it coexists with the debug build rather than replacing it:
+
+```
+cmake --preset clang-release
+cmake --build build/release --target 7_PBR
+./build/release/7_PBR
+```
+
 `glfw3` is expected to already be installed on the system (`find_package(glfw3 REQUIRED)`); `glm` 1.0.1 is fetched automatically via `FetchContent` at configure time.
 
 ## Architecture
