@@ -32,6 +32,7 @@ target_sources(gl_common
             src/screen_quad.cppm
             src/shadow_map.cppm
             src/light.cppm
+            src/voxel_grid.cppm
 )
 target_sources(gl_common PRIVATE
     src/glad.c
@@ -71,3 +72,4 @@ add_demo(4_model_loading)
 add_demo(5_deferred_rendering)
 add_demo(6_shadow_mapping)
 add_demo(7_PBR)
+add_demo(8_voxel_gi)

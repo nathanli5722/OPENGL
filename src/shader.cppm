@@ -13,21 +13,31 @@ export module shader;
 
 export class Shader {
 public:
-    Shader(const std::string& vertexPath, const std::string& fragmentPath) {
+    Shader(const std::string& vertexPath, const std::string& fragmentPath,
+           const std::string& geometryPath = "") {
         std::string vertexCode = readFile(vertexPath);
         std::string fragmentCode = readFile(fragmentPath);
 
         unsigned int vertexShader = compile(GL_VERTEX_SHADER, vertexCode, "VERTEX");
         unsigned int fragmentShader = compile(GL_FRAGMENT_SHADER, fragmentCode, "FRAGMENT");
+        unsigned int geometryShader = 0;
+        if (!geometryPath.empty()) {
+            std::string geometryCode = readFile(geometryPath);
+            geometryShader = compile(GL_GEOMETRY_SHADER, geometryCode, "GEOMETRY");
+        }
 
         program = glCreateProgram();
         glAttachShader(program, vertexShader);
         glAttachShader(program, fragmentShader);
+        if (geometryShader != 0)
+            glAttachShader(program, geometryShader);
         glLinkProgram(program);
         checkLinkErrors(program);
 
         glDeleteShader(vertexShader);
         glDeleteShader(fragmentShader);
+        if (geometryShader != 0)
+            glDeleteShader(geometryShader);
     }
 
     ~Shader() {

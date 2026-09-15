@@ -19,13 +19,8 @@ int main() {
     try {
         Window window(width, height, "Shadow Mapping");
 
-        // The New Sponza glTF pack (pkg_a_curtains) is realistic-scale with
-        // several 4096x4096 textures — too heavy to load quickly on this
-        // machine. This classic Crytek Sponza (same mesh/scale as the
-        // sponza.obj other demos use, just repackaged with much smaller
-        // 1024x1024 textures) is the lighter stand-in for iterating on the
-        // PBR pipeline itself.
-        Model sceneModel = loadModel(DEMO_DIR "/assets/Sponza-master/sponza.obj");
+        Model sceneModel = loadModel(std::string(PROJECT_SOURCE_DIR) +
+                                      "/src/assets/Sponza-master/sponza.obj");
 
         Shader deferred_shader(DEMO_DIR "/vertex.vert", DEMO_DIR "/deferred-fragment.frag");
         ScreenQuad lighting_shader(DEMO_DIR "/lighting.frag");

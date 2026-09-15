@@ -32,7 +32,7 @@ export class Window {
 
     void init(std::string name) {
       glfwInit();
-      glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+      glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
       glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
       glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
       window = glfwCreateWindow(width, height, name.c_str(), NULL, NULL);
@@ -43,7 +43,7 @@ export class Window {
       }
       glfwMakeContextCurrent(window);
 
-      if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+      if (!gladLoadGL((GLADloadfunc)glfwGetProcAddress))
         throw std::exception();
       glViewport(0, 0, width, height);
       glEnable(GL_DEPTH_TEST);
