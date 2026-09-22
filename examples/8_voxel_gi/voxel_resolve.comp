@@ -1,0 +1,52 @@
+#version 430 core
+
+// Resolve pass: turns the four GL_R32UI voxelization accumulators into the one
+// filterable RGBA16F volume that gets mipmapped and cone-traced. One invocation
+// per voxel, 512 per workgroup.
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Bindings 1..4 match voxelize.frag so the two passes agree on which volume is
+// which; binding 5 is the resolve target.
+layout(binding = 1, r32ui) uniform readonly uimage3D rVoxel;
+layout(binding = 2, r32ui) uniform readonly uimage3D gVoxel;
+layout(binding = 3, r32ui) uniform readonly uimage3D bVoxel;
+layout(binding = 4, r32ui) uniform readonly uimage3D aVoxel;
+layout(binding = 5, rgba16f) uniform writeonly image3D voxelRadiance;
+
+uniform int voxelResolution;
+
+// Alpha is 1 for any occupied voxel rather than something derived from the
+// sample count: it represents occupancy, and it is what makes the mip chain
+// work. glGenerateMipmap box-filters rgb and alpha independently, so at mip N
+// alpha becomes the fraction of covered subvoxels and rgb becomes the
+// coverage-weighted color sum — i.e. premultiplied radiance, the form that
+// front-to-back cone accumulation (`accum.rgb += (1 - accum.a) * voxel.rgb`)
+// wants, and from which `voxel.rgb / voxel.a` recovers the plain average color.
+//
+// Empty voxels must be written too, not just skipped: glTexStorage3D leaves the
+// volume uninitialized, so a skipped voxel would keep whatever was there before.
+void main()
+{
+    ivec3 pos = ivec3(gl_GlobalInvocationID);
+
+    // ComputeShader::groupCount() rounds up, so the last workgroup along each
+    // axis can run off the end of the volume when the resolution is not a
+    // multiple of the local size.
+    if (any(greaterThanEqual(pos, ivec3(voxelResolution))))
+        return;
+
+    uint a = imageLoad(aVoxel, pos).r;
+
+    //empty
+    if (a == 0) {
+        imageStore(voxelRadiance, pos, vec4(0.0));
+        return;
+    }
+
+    uint r = imageLoad(rVoxel, pos).r;
+    uint g = imageLoad(gVoxel, pos).r;
+    uint b = imageLoad(bVoxel, pos).r;
+
+    vec3 radiance = vec3(r, g, b) / (255.0 * a);
+    imageStore(voxelRadiance, pos, vec4(radiance, 1.0));
+}

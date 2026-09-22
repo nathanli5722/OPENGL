@@ -65,10 +65,9 @@ void main() {
         // write" view, not a filtered/cone-traced one.
         vec4 voxel = textureLod(voxelGrid, uvw, 0.0);
 
-        // voxel.a is a raw accumulated fragment-weight (see VoxelGrid's
-        // additive blending), not a resolved [0,1] opacity yet — clamping
-        // it here is only good enough for "does this voxel look occupied,"
-        // not physically-correct occlusion.
+        // After the resolve pass voxel.a is real [0,1] occupancy: 1 for an
+        // occupied voxel at mip 0, and the covered fraction at coarser mips.
+        // This view samples mip 0 only, so it is effectively binary here.
         float alpha = clamp(voxel.a, 0.0, 1.0);
         vec3 color = voxel.a > 0.0 ? voxel.rgb / voxel.a : vec3(0.0);
 

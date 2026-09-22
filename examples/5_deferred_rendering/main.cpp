@@ -10,7 +10,17 @@ import model;
 import framebuffer;
 import screen_quad;
 
+// The framebuffer size to aim for, in pixels — Window converts this to the
+// logical size the compositor wants, so it means the same thing on a HiDPI
+// display as on a 1x one. The value actually obtained is window.getWidth()/
+// getHeight(), which is what render targets are sized from below.
 const float width = 1920.0f, height = 1080.0f;
+
+// Fraction of the framebuffer the geometry pass is shaded at. The lighting
+// pass always covers the whole window and samples the G-buffer with 0..1 UVs,
+// so a value below 1.0 simply trades sharpness for fill rate without any other
+// change. 1.0 is native resolution.
+const float renderScale = 1.0f;
 
 
 int main() {
@@ -23,10 +33,12 @@ int main() {
         ScreenQuad lighting_shader(DEMO_DIR "/lighting.frag");
 
         Camera camera(glm::vec3(0.0f, 300.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f),
-                      glm::vec3(0.0f, 1.0f, 0.0f), 45.0f, width / height, 1.0f, 10000.0f);
+                      glm::vec3(0.0f, 1.0f, 0.0f), 45.0f, window.getAspect(),
+                      1.0f, 10000.0f);
         camera.movementSpeed = 300.0f;
 
-        GBuffer gBuffer(static_cast<int>(width), static_cast<int>(height));
+        GBuffer gBuffer(static_cast<int>(window.getWidth() * renderScale),
+                        static_cast<int>(window.getHeight() * renderScale));
 
         glm::mat4 modelMat = glm::mat4(1.0f);
 
@@ -48,6 +60,10 @@ int main() {
             gBuffer.unbind();
 
             // Lighting pass: sample the G-buffer from a full-screen quad.
+            // The geometry pass left the viewport at the G-buffer's size, which
+            // with renderScale < 1 is smaller than the window; bindDefault()
+            // is what makes this quad cover the whole framebuffer.
+            window.bindDefault();
             gBuffer.bindForReading();
 
             lighting_shader.shader.use();

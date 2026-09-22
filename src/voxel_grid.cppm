@@ -1,53 +1,86 @@
 module;
 
+#include <array>
+#include <cstdint>
 #include <stdexcept>
+#include <vector>
 #include "glad/glad.h"
 #include <glm/glm.hpp>
 
 export module voxel_grid;
 
-// Owns a single GL_TEXTURE_3D (resolution^3, RGBA16F) used as a voxelized
-// radiance/opacity grid for voxel cone tracing: rgb accumulates
-// color*weight and a accumulates weight during the voxelization pass, so
-// additive blending (GL_ONE, GL_ONE) onto this texture reads back as a
-// weighted average per voxel — no imageAtomic*/image-load-store needed for
-// this first pass, just plain rasterization + blending. boundsMin/boundsMax
-// is the world-space AABB the grid covers; the voxelization and
-// cone-tracing shaders are responsible for mapping world positions into and
-// out of that box (this class only owns the texture's lifecycle, not that
-// mapping).
+// The grid is two representations of the same volume, in sequence.
 //
-// The write target is attached via plain glFramebufferTexture (not
-// glFramebufferTexture3D, which pins one Z-slice) so it's a *layered*
-// attachment: a geometry shader can route each primitive to an arbitrary
-// Z-layer via gl_Layer, which is how single-pass dominant-axis voxelization
-// writes into the whole volume from one draw instead of three orthogonal
-// passes.
+// Voxelization writes into four GL_R32UI volumes — R, G, B, and a sample
+// count — because a fragment shader can only atomically add to an integer
+// image, and many fragments land in the same voxel. Colors go in as 8-bit
+// fixed point (channel * 255) and simply sum; the count tracks how many
+// fragments contributed, so the average is rgb / (255 * count).
 //
-// Same bindForWriting()/clear()/bindForReading()/unbind() + RAII + move-only
-// shape as GBuffer (framebuffer.cppm) and ShadowMap (shadow_map.cppm).
+// Nothing downstream can trace those directly: integer textures cannot be
+// linearly filtered, and cone tracing needs trilinear samples across a mip
+// chain. So a compute pass resolves the four accumulators into a single
+// filterable GL_RGBA16F volume, which is what gets mipmapped and sampled.
+// That texture stores premultiplied radiance — rgb = average color, a = 1
+// for any occupied voxel — so that a box-filtered mip's alpha is the
+// fraction of covered subvoxels and rgb is the coverage-weighted color sum,
+// which is exactly the form front-to-back cone accumulation expects.
 export class VoxelGrid {
 public:
     VoxelGrid(int resolution, glm::vec3 boundsMin, glm::vec3 boundsMax)
-        : resolution(resolution), boundsMin(boundsMin), boundsMax(boundsMax)
+        : resolution(resolution), boundsMin(boundsMin), boundsMax(boundsMax),
+          clearData(static_cast<std::size_t>(resolution) * resolution * resolution, 0u)
     {
-        glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        if (resolution <= 0)
+            throw std::runtime_error("VoxelGrid resolution must be positive");
 
-        glGenTextures(1, &voxelTex);
-        glBindTexture(GL_TEXTURE_3D, voxelTex);
-        glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA16F, resolution, resolution, resolution,
-                     0, GL_RGBA, GL_FLOAT, nullptr);
+        // Accumulators: level 0 only, never sampled, only bound as images.
+        glGenTextures(static_cast<GLsizei>(voxelTex.size()), voxelTex.data());
+        for (const auto texture : voxelTex) {
+            glBindTexture(GL_TEXTURE_3D, texture);
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_R32UI, resolution, resolution, resolution,
+                         0, GL_RED_INTEGER, GL_UNSIGNED_INT, nullptr);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        }
+
+        // Resolved radiance: the full mip chain is allocated up front by
+        // glTexStorage3D so glGenerateMipmap has levels to fill, and the
+        // trilinear min filter is what makes cone tracing's coarser-mip
+        // samples meaningful rather than point-sampled noise.
+        mipLevels = 1;
+        for (int size = resolution; size > 1; size >>= 1)
+            ++mipLevels;
+
+        glGenTextures(1, &radianceTex);
+        glBindTexture(GL_TEXTURE_3D, radianceTex);
+        glTexStorage3D(GL_TEXTURE_3D, mipLevels, GL_RGBA16F,
+                       resolution, resolution, resolution);
         glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_3D, 0);
 
-        // Layered attachment (no zoffset): lets a geometry shader select
-        // gl_Layer per-primitive rather than binding one fixed Z-slice.
-        glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, voxelTex, 0);
-        glDrawBuffer(GL_COLOR_ATTACHMENT0);
+        // A framebuffer with no attachments (ARB_framebuffer_no_attachments,
+        // core in 4.3). Rasterization needs *some* target to define the
+        // viewport it fills, but this pass writes only through image stores,
+        // so there is nothing to attach. Declaring the default width/height
+        // decouples voxel resolution from the window size, which binding
+        // framebuffer 0 would not do.
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferParameteri(GL_FRAMEBUFFER,
+                                GL_FRAMEBUFFER_DEFAULT_WIDTH, resolution);
+        glFramebufferParameteri(GL_FRAMEBUFFER,
+                                GL_FRAMEBUFFER_DEFAULT_HEIGHT, resolution);
+        glFramebufferParameteri(GL_FRAMEBUFFER,
+                                GL_FRAMEBUFFER_DEFAULT_SAMPLES, 0);
+        glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
 
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
@@ -57,95 +90,123 @@ public:
     }
 
     ~VoxelGrid() {
+        glDeleteTextures(static_cast<GLsizei>(voxelTex.size()), voxelTex.data());
+        glDeleteTextures(1, &radianceTex);
         glDeleteFramebuffers(1, &fbo);
-        glDeleteTextures(1, &voxelTex);
     }
 
     VoxelGrid(const VoxelGrid&) = delete;
     VoxelGrid& operator=(const VoxelGrid&) = delete;
 
     VoxelGrid(VoxelGrid&& other) noexcept
-        : fbo(other.fbo), voxelTex(other.voxelTex), resolution(other.resolution),
-          boundsMin(other.boundsMin), boundsMax(other.boundsMax)
+        : voxelTex(other.voxelTex), radianceTex(other.radianceTex),
+          fbo(other.fbo), resolution(other.resolution), mipLevels(other.mipLevels),
+          boundsMin(other.boundsMin), boundsMax(other.boundsMax),
+          clearData(std::move(other.clearData))
     {
-        other.fbo = other.voxelTex = 0;
+        other.voxelTex.fill(0);
+        other.radianceTex = 0;
+        other.fbo = 0;
     }
 
     VoxelGrid& operator=(VoxelGrid&& other) noexcept {
         if (this != &other) {
+            glDeleteTextures(static_cast<GLsizei>(voxelTex.size()), voxelTex.data());
+            glDeleteTextures(1, &radianceTex);
             glDeleteFramebuffers(1, &fbo);
-            glDeleteTextures(1, &voxelTex);
-
-            fbo = other.fbo;
             voxelTex = other.voxelTex;
+            radianceTex = other.radianceTex;
+            fbo = other.fbo;
             resolution = other.resolution;
+            mipLevels = other.mipLevels;
             boundsMin = other.boundsMin;
             boundsMax = other.boundsMax;
-            other.fbo = other.voxelTex = 0;
+            clearData = std::move(other.clearData);
+            other.voxelTex.fill(0);
+            other.radianceTex = 0;
+            other.fbo = 0;
         }
         return *this;
     }
 
-    // Voxelization pass: subsequent draws (typically a vertex/geometry/
-    // fragment trio that rasterizes the scene into grid space and writes
-    // gl_Layer per-primitive) write into this texture instead of the
-    // default framebuffer. Depth testing and face culling are off since
-    // every triangle must contribute regardless of winding or occlusion —
-    // there is no camera/depth concept during voxelization, only additive
-    // blending of whatever writes land in each voxel.
-    void bindForWriting() const {
+    // Binds the attachment-less FBO; the shader's only output is its image
+    // stores. Depth and cull are off so that every triangle rasterizes into
+    // the grid regardless of facing or occlusion.
+    void bindForWriting(unsigned int firstImageUnit) const {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glViewport(0, 0, resolution, resolution);
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE);
+        for (unsigned int i = 0; i < voxelTex.size(); ++i)
+            glBindImageTexture(firstImageUnit + i, voxelTex[i], 0, GL_TRUE, 0,
+                               GL_READ_WRITE, GL_R32UI);
     }
 
-    // Clears every layer of the voxel texture. Call after bindForWriting(),
-    // before the voxelization pass's draw calls. (glClear on a layered
-    // color attachment clears every layer in one call, no per-layer loop
-    // needed.)
+    // OpenGL 4.3 lacks glClearTexImage (introduced in 4.4), so clear level 0
+    // explicitly. Static scenes pay this upload only when revoxelized.
     void clear() const {
-        glClear(GL_COLOR_BUFFER_BIT);
+        for (const auto texture : voxelTex) {
+            glBindTexture(GL_TEXTURE_3D, texture);
+            glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, resolution, resolution, resolution,
+                            GL_RED_INTEGER, GL_UNSIGNED_INT, clearData.data());
+        }
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
 
-    // Rebuilds the mip chain from the base level after voxelization, via
-    // GL's default (isotropic, box-filter) mipmap generation. This is only
-    // an approximation for cone tracing — a direction-aware chain would
-    // need six separately-filtered mip chains (±X/±Y/±Z) to avoid light
-    // leaking through thin geometry — but it's a reasonable starting point.
+    // For the resolve compute pass: the four accumulators read-only on
+    // firstImageUnit..+3 (matching the voxelization bindings, so the shaders
+    // agree), and the radiance volume write-only on firstImageUnit + 4. The
+    // barrier makes the voxelization pass's atomics visible to the loads.
+    void bindForResolve(unsigned int firstImageUnit) const {
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        for (unsigned int i = 0; i < voxelTex.size(); ++i)
+            glBindImageTexture(firstImageUnit + i, voxelTex[i], 0, GL_TRUE, 0,
+                               GL_READ_ONLY, GL_R32UI);
+        glBindImageTexture(firstImageUnit + static_cast<unsigned int>(voxelTex.size()),
+                           radianceTex, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+    }
+
+    // Mips are built from the resolved RGBA16F volume, never from the integer
+    // accumulators — glGenerateMipmap on an integer format is not portable and
+    // the result could not be filtered anyway.
     void generateMips() const {
-        glBindTexture(GL_TEXTURE_3D, voxelTex);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+        glBindTexture(GL_TEXTURE_3D, radianceTex);
         glGenerateMipmap(GL_TEXTURE_3D);
+        glBindTexture(GL_TEXTURE_3D, 0);
     }
 
-    // Cone-tracing read pass: binds the voxel texture as a sampler3D on the
-    // given unit for a shader to sample (typically via textureLod, picking
-    // a mip level from the cone's footprint at each step).
-    void bindForReading(unsigned int unit) const {
-        glActiveTexture(GL_TEXTURE0 + unit);
-        glBindTexture(GL_TEXTURE_3D, voxelTex);
+    // Binds the resolved radiance volume as a single sampler3D — this is what
+    // cone tracing and the debug raymarch consume.
+    void bindForReading(unsigned int textureUnit) const {
+        glActiveTexture(GL_TEXTURE0 + textureUnit);
+        glBindTexture(GL_TEXTURE_3D, radianceTex);
     }
 
-    // Returns to the default framebuffer (the window's own backbuffer) and
-    // restores the state bindForWriting() changed.
+    // Deliberately leaves the viewport at the grid's resolution. Every pass
+    // that follows states its own (GBuffer::bindForWriting, Window::bindDefault)
+    // — saving and restoring here would only propagate whatever the *previous*
+    // pass leaked, which is how the shadow map's square 2048x2048 ended up
+    // stretching the debug view.
     void unbind() const {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_CULL_FACE);
-        glDisable(GL_BLEND);
     }
 
-    unsigned int textureId() const { return voxelTex; }
+    unsigned int textureId() const { return radianceTex; }
     int getResolution() const { return resolution; }
+    int getMipLevels() const { return mipLevels; }
     glm::vec3 getBoundsMin() const { return boundsMin; }
     glm::vec3 getBoundsMax() const { return boundsMax; }
 
 private:
+    std::array<unsigned int, 4> voxelTex{};
+    unsigned int radianceTex = 0;
     unsigned int fbo = 0;
-    unsigned int voxelTex = 0;
     int resolution = 0;
+    int mipLevels = 1;
     glm::vec3 boundsMin{0.0f};
     glm::vec3 boundsMax{0.0f};
+    std::vector<std::uint32_t> clearData;
 };

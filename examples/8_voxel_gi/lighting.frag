@@ -1,4 +1,4 @@
-#version 400 core
+#version 420 core
 out vec4 FragColor;
 
 in vec2 TexCoords;
@@ -7,7 +7,7 @@ uniform sampler2D gPosition;
 uniform sampler2D gNormal;
 uniform sampler2D gAlbedo;
 uniform sampler2D gMetallicRoughness;
-uniform sampler2D shadowMap;
+layout(binding = 5) uniform sampler2D shadowMap;
 
 uniform vec3 viewPos;
 

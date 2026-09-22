@@ -12,28 +12,24 @@ in VS_OUT {
 out vec3 WorldPos;
 out vec3 Normal;
 out vec2 TexCoords;
+// Integer varyings must be flat, and voxelize.frag declares them `flat in` —
+// a mismatched interpolation qualifier is a link error.
+flat out int layer;
+flat out int mainAxis;
 
 uniform vec3 voxelBoundsMin;
 uniform vec3 voxelBoundsMax;
 uniform int voxelResolution;
 
-// TODO(you): single-pass dominant-axis voxelization (Crassin & Green,
-// "Octree-Based Sparse Voxelization of Alpha Tested Foliage"). For this
-// triangle:
-//   1. Pick whichever world-space axis (X/Y/Z) the triangle's face normal
-//      is most aligned with — e.g. from the cross product of its two edges
-//      (gs_in[1].WorldPos - gs_in[0].WorldPos) x (gs_in[2].WorldPos -
-//      gs_in[0].WorldPos) — so it rasterizes into the most voxels instead
-//      of degenerating to a sliver when viewed edge-on down a fixed axis.
-//   2. For each of the 3 vertices, map WorldPos from [voxelBoundsMin,
-//      voxelBoundsMax] into [-1, 1] grid space, then drop the chosen axis
-//      to get gl_Position.xy for that vertex (gl_Position.z/.w can stay
-//      fixed — there's no depth test during voxelization).
-//   3. Compute gl_Layer once per triangle (not per vertex) from the
-//      triangle's position along the chosen axis, mapped to
-//      [0, voxelResolution - 1].
-//   4. Pass WorldPos/Normal/TexCoords through unchanged to voxelize.frag,
-//      EmitVertex() per vertex, then EndPrimitive().
+// Single-pass dominant-axis voxelization (Crassin & Green, "Octree-Based
+// Sparse Voxelization of Alpha Tested Foliage"). Each triangle is projected
+// down whichever world axis its face normal is most aligned with, so it
+// rasterizes into the most voxels instead of degenerating to a sliver when
+// viewed edge-on down a fixed axis. The chosen axis and slice index travel to
+// the fragment shader as flat varyings rather than via gl_Layer: nothing is
+// attached to the framebuffer, so there are no layers to route to — the
+// fragment shader reassembles the ivec3 itself and writes through
+// imageAtomicAdd.
 void main()
 {
     //find face normal (vertex normals aren't accurate)
@@ -44,36 +40,39 @@ void main()
         axis = 1;
     else if (faceNormal.z > faceNormal.x && faceNormal.z > faceNormal.y)
         axis = 2;
-    
 
+    //normalize to min and max, then change to -1, 1. Done for all three up
+    //front because the emit loop needs the flattened xy and the slice index
+    //needs the triangle's centroid along the dominant axis.
+    vec3 gridPos[3];
+    for (int i = 0; i < 3; i++)
+        gridPos[i] = (gs_in[i].WorldPos - voxelBoundsMin)
+                         / (voxelBoundsMax - voxelBoundsMin) * 2.0 - 1.0;
+
+    // One slice for the whole triangle, not one per vertex: `layer` is flat,
+    // so a per-vertex value would collapse to the provoking vertex's anyway.
+    float centroidAxis =
+        (gridPos[0][axis] + gridPos[1][axis] + gridPos[2][axis]) / 3.0;
+
+    mainAxis = axis;
+    layer = clamp(int((centroidAxis * 0.5 + 0.5) * voxelResolution),
+                  0, voxelResolution - 1);
 
     for (int i = 0; i < 3; i++) {
-        //normalize to min and max, then change to -1, 1
-        vec3 transformedPos = (gs_in[i].WorldPos - voxelBoundsMin) 
-                                / (voxelBoundsMax - voxelBoundsMin) * 2.0 - 1.0;
-
         vec2 flatPos;
-        float otherAxis;
-        
-        if (axis == 0) {
-            otherAxis = transformedPos.x;
-            flatPos = transformedPos.yz;
-        }
-        else if (axis == 1) {
-            otherAxis = transformedPos.y;
-            flatPos = transformedPos.xz;
-        }
-        else {
-            otherAxis = transformedPos.z;
-            flatPos = transformedPos.xy;
-        }
 
-        gl_Layer = int((otherAxis - 1.0) / 2.0 * voxelResolution);
+        if (axis == 0)
+            flatPos = gridPos[i].yz;
+        else if (axis == 1)
+            flatPos = gridPos[i].xz;
+        else
+            flatPos = gridPos[i].xy;
+
         gl_Position = vec4(flatPos, 0.0, 1.0);
 
-        WorldPos = gs_in[0].WorldPos;
-        Normal = gs_in[0].Normal;
-        TexCoords = gs_in[0].TexCoords;
+        WorldPos = gs_in[i].WorldPos;
+        Normal = gs_in[i].Normal;
+        TexCoords = gs_in[i].TexCoords;
         EmitVertex();
     }
     EndPrimitive();

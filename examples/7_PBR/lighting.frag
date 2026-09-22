@@ -7,6 +7,7 @@ uniform sampler2D gPosition;
 uniform sampler2D gNormal;
 uniform sampler2D gAlbedo;
 uniform sampler2D gMetallicRoughness;
+//no emmissive map, so shadow is 4
 uniform sampler2D shadowMap;
 
 uniform vec3 viewPos;
