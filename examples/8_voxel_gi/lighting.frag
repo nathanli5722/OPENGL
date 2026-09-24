@@ -35,24 +35,17 @@ uniform float voxelGridResolution;
 uniform float sceneRadius;
 
 #define STEP_FACTOR 0.5
+#define SKY_COLOR (vec3(0.6, 0.7, 0.9) * 0.2)
 
-// TODO(you): march a cone of the given half-angle `aperture` (radians)
-// from `origin` along `direction` through the voxel grid's mip chain,
-// compositing radiance+opacity front-to-back (nearer samples occlude/
-// contribute more than farther ones), and return the accumulated RGB
-// radiance. Conceptually, at each step: track total distance traveled from
-// `origin`; that distance plus `aperture` implies a cone diameter at that
-// point; use the diameter (relative to a voxel's world-space size) to pick
-// a mip level — wider footprint -> coarser mip, so one sample represents
-// everything the cone covers there rather than one thin voxel; stop once
-// accumulated opacity is near 1 or a max distance is reached.
-vec3 traceCone(vec3 origin, vec3 direction, vec3 normal, float aperture) {
+// traces a cone, 4th component is for ao
+vec4 traceCone(vec3 origin, vec3 direction, vec3 normal, float aperture) {
     float diameter;
     float voxelSize = (voxelGridBoundsMax.r - voxelGridBoundsMin.r) 
                         / voxelGridResolution;
     float dist = voxelSize;
-    vec4 color = vec4(0.0);
-    float mip;
+    vec4 color = vec4(0.0), temp;
+    float mip, ao = 0.0;
+    float aoRange = 5.0 * voxelSize; //bigger -> more ao
     vec3 pos, uvw;
     //offset origin by 1 voxel
     origin += normal * voxelSize;
@@ -67,13 +60,51 @@ vec3 traceCone(vec3 origin, vec3 direction, vec3 normal, float aperture) {
         if (any(lessThan(uvw, vec3(0.0))) || 
             any(greaterThan(uvw, vec3(1.0)))) 
             break;  // left the grid
+        temp = textureLod(voxelGrid, uvw, mip);
 
-        color += (1.0 - color.a) * textureLod(voxelGrid, uvw, mip);
+        color += (1.0 - color.a) * temp;
+
+        //larger dist gets less ao
+        if (dist < aoRange)
+            ao += (1.0 - ao) * temp.a / (1.0 + dist / voxelSize);
 
         dist += diameter * STEP_FACTOR;
     }
-    return color.rgb;
+
+    color.rgb += (1.0 - color.a) * SKY_COLOR;  
+
+    return vec4(color.rgb, ao);
 }
+
+vec4 traceHemisphere(vec3 pos, vec3 normal) {
+    // any vector not parallel to N works for building the frame
+    vec3 up = abs(normal.y) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+
+    //create tangent space
+    vec3 T = normalize(cross(up, normal));
+    vec3 B = cross(normal, T);
+
+    const float aperture = radians(30.0);   // half-angle
+    const float theta    = radians(60.0);   // tilt of side cones
+
+    //normal facing cone
+    vec4 result = 0.25 * traceCone(pos, normal, normal, aperture);
+
+    //other 5 cones
+    //translate from spherical coords
+    for (int k = 0; k < 5; ++k) {
+        float phi = radians(72.0) * float(k);
+
+        //vec in tangent
+        vec3 d = vec3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+
+        //vec in world
+        vec3 dir = T * d.x + normal * d.y + B * d.z;
+        result += 0.15 * traceCone(pos, dir, normal, aperture);
+    }
+    return result;
+}
+
 
 float calcShadowBlur(int x, int y, vec2 texelSize);
 
@@ -169,27 +200,11 @@ void main()
     vec3 radiance = dirLight.color * dirLight.intensity * lit;
     vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
-    // No irradiance map yet, so ambient stays this project's existing flat
-    // approximation of indirect light rather than a real IBL term.
-    vec3 ambient = albedo * ambientColor * ambientIntensity;
+    //ambient
+    vec3 ambient = kD * albedo * vec3(traceHemisphere(position, N));
 
-    // TODO(you): replace (or blend with) the flat `ambient` term above with
-    // real bounce lighting: call traceCone() several times across a
-    // hemisphere oriented around N (a handful of fixed directions weighted
-    // toward N — the well-known 5/6-cone diffuse pattern most VCT writeups
-    // use), sum the results, and combine with albedo the same way `ambient`
-    // already does, e.g.:
-    //   vec3 indirectDiffuse = albedo * traceHemisphere(position, N);
-    //   vec3 ambient = indirectDiffuse; // instead of the flat term above
-
-    // albedoMap/emissiveMap were uploaded as GL_SRGB8 (see texture.cppm),
-    // so the GPU already linearized them on sample, and every lighting term
-    // above is computed in that same linear space — correct for the math,
-    // but the display expects sRGB-encoded values. Without this, the whole
-    // image reads far too dark: gamma compresses dark linear values much
-    // more than bright ones, so anything dim collapses toward black rather
-    // than just looking dim.
     vec3 color = ambient + Lo;
+    //linear to srgb
     color = pow(color, vec3(1.0 / 2.2));
 
     FragColor = vec4(color, 1.0);

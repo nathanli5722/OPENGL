@@ -156,6 +156,7 @@ void renderLightingPass(const Window& window, const GBuffer& gBuffer,
     lightingShader.setVec3("voxelGridBoundsMax", voxelGrid.getBoundsMax());
     lightingShader.setFloat("voxelGridResolution",
                             static_cast<float>(voxelGrid.getResolution()));
+    lightingShader.setFloat("sceneRadius", sceneRadius);
     lightingShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
     lightingShader.setVec3("viewPos", camera.position);
     dirLight.setUniforms(lightingShader, "dirLight");
