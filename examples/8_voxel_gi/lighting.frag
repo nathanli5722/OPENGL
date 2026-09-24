@@ -3,10 +3,10 @@ out vec4 FragColor;
 
 in vec2 TexCoords;
 
-uniform sampler2D gPosition;
-uniform sampler2D gNormal;
-uniform sampler2D gAlbedo;
-uniform sampler2D gMetallicRoughness;
+layout(binding = 0) uniform sampler2D gPosition;
+layout(binding = 1) uniform sampler2D gNormal;
+layout(binding = 2) uniform sampler2D gAlbedo;
+layout(binding = 3) uniform sampler2D gMetallicRoughness;
 layout(binding = 5) uniform sampler2D shadowMap;
 
 uniform vec3 viewPos;
@@ -27,10 +27,14 @@ uniform float ambientIntensity;
 // averaged opacity per voxel), bound for reading in main.cpp. Bounds/
 // resolution let traceCone() convert between world space and the grid's
 // [0,1]^3 texture space.
-uniform sampler3D voxelGrid;
+layout(binding = 6) uniform sampler3D voxelGrid;
 uniform vec3 voxelGridBoundsMin;
 uniform vec3 voxelGridBoundsMax;
 uniform float voxelGridResolution;
+
+uniform float sceneRadius;
+
+#define STEP_FACTOR 0.5
 
 // TODO(you): march a cone of the given half-angle `aperture` (radians)
 // from `origin` along `direction` through the voxel grid's mip chain,
@@ -42,8 +46,33 @@ uniform float voxelGridResolution;
 // a mip level — wider footprint -> coarser mip, so one sample represents
 // everything the cone covers there rather than one thin voxel; stop once
 // accumulated opacity is near 1 or a max distance is reached.
-vec3 traceCone(vec3 origin, vec3 direction, float aperture) {
-    return vec3(0.0);
+vec3 traceCone(vec3 origin, vec3 direction, vec3 normal, float aperture) {
+    float diameter;
+    float voxelSize = (voxelGridBoundsMax.r - voxelGridBoundsMin.r) 
+                        / voxelGridResolution;
+    float dist = voxelSize;
+    vec4 color = vec4(0.0);
+    float mip;
+    vec3 pos, uvw;
+    //offset origin by 1 voxel
+    origin += normal * voxelSize;
+
+    while (color.a < .95 && dist <= sceneRadius * 2){
+        diameter = max(voxelSize, 2 * tan(aperture) * dist);
+        mip = log2(diameter / voxelSize);
+
+        pos = origin + dist * direction;
+        uvw = (pos - voxelGridBoundsMin) / 
+                (voxelGridBoundsMax - voxelGridBoundsMin);
+        if (any(lessThan(uvw, vec3(0.0))) || 
+            any(greaterThan(uvw, vec3(1.0)))) 
+            break;  // left the grid
+
+        color += (1.0 - color.a) * textureLod(voxelGrid, uvw, mip);
+
+        dist += diameter * STEP_FACTOR;
+    }
+    return color.rgb;
 }
 
 float calcShadowBlur(int x, int y, vec2 texelSize);

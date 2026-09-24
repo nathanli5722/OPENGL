@@ -47,36 +47,55 @@ void main() {
         return;
     }
 
+    // Grid traversal (Amanatides & Woo, "A Fast Voxel Traversal Algorithm")
+    // instead of fixed-size steps: the ray walks cell to cell, always crossing
+    // whichever boundary is nearest, so it visits every voxel it passes
+    // through exactly once — no skipped corners.
+    int res = int(voxelGridResolution);
     vec3 boxSize = voxelGridBoundsMax - voxelGridBoundsMin;
-    float voxelSize = boxSize.x / voxelGridResolution;
-    // Half a voxel per step is a reasonable default: coarse enough to be
-    // "quick", fine enough not to skip over thin geometry.
-    float stepSize = max(voxelSize * 0.5, 0.001);
+    vec3 cellSize = boxSize / voxelGridResolution;
 
-    float tCur = max(t.x, 0.0);
-    vec4 accum = vec4(0.0);
+    // A zero component would make 1/dir infinite; nudge it instead.
+    vec3 dir = rayDir + vec3(equal(rayDir, vec3(0.0))) * 1e-6;
+    vec3 invDir = 1.0 / dir;
 
-    for (int i = 0; i < 1024; i++) {
-        if (tCur > t.y || accum.a > 0.99) break;
+    float tEntry = max(t.x, 0.0);
+    // Nudged a hair inside so the starting cell is not ambiguous when the
+    // ray enters exactly on the grid boundary.
+    vec3 startPos = viewPos + rayDir * (tEntry + 1e-4 * cellSize.x);
+    ivec3 cell = clamp(ivec3((startPos - voxelGridBoundsMin) / cellSize),
+                       ivec3(0), ivec3(res - 1));
 
-        vec3 samplePos = viewPos + rayDir * tCur;
-        vec3 uvw = (samplePos - voxelGridBoundsMin) / boxSize;
-        // Mip 0 explicitly: this is a "what did voxelization actually
-        // write" view, not a filtered/cone-traced one.
-        vec4 voxel = textureLod(voxelGrid, uvw, 0.0);
+    ivec3 stepDir = ivec3(sign(dir));
+    // Ray t at which the next x/y/z cell boundary is crossed, and how much t
+    // one whole cell spans along each axis.
+    vec3 nextBoundary = voxelGridBoundsMin
+                      + (vec3(cell) + max(vec3(stepDir), 0.0)) * cellSize;
+    vec3 tMax = (nextBoundary - viewPos) * invDir;
+    vec3 tDelta = abs(cellSize * invDir);
 
-        // After the resolve pass voxel.a is real [0,1] occupancy: 1 for an
-        // occupied voxel at mip 0, and the covered fraction at coarser mips.
-        // This view samples mip 0 only, so it is effectively binary here.
-        float alpha = clamp(voxel.a, 0.0, 1.0);
-        vec3 color = voxel.a > 0.0 ? voxel.rgb / voxel.a : vec3(0.0);
+    for (int i = 0; i < 3 * res; i++) {
+        // texelFetch at mip 0: this is a "what did voxelization actually
+        // write" view, so each voxel is read on its own — no filtering.
+        // Mip 0 alpha is binary (1 for occupied), so the first hit is opaque.
+        vec4 voxel = texelFetch(voxelGrid, cell, 0);
+        if (voxel.a > 0.0) {
+            FragColor = vec4(voxel.rgb / voxel.a, 1.0);
+            return;
+        }
 
-        accum.rgb += (1.0 - accum.a) * alpha * color;
-        accum.a += (1.0 - accum.a) * alpha;
+        // Step into whichever neighbor's boundary the ray reaches first.
+        if (tMax.x < tMax.y && tMax.x < tMax.z) {
+            cell.x += stepDir.x; tMax.x += tDelta.x;
+        } else if (tMax.y < tMax.z) {
+            cell.y += stepDir.y; tMax.y += tDelta.y;
+        } else {
+            cell.z += stepDir.z; tMax.z += tDelta.z;
+        }
 
-        tCur += stepSize;
+        if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(res))))
+            break;
     }
 
-    vec3 finalColor = accum.rgb + background * (1.0 - accum.a);
-    FragColor = vec4(finalColor, 1.0);
+    FragColor = vec4(background, 1.0);
 }

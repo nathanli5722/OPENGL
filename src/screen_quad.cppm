@@ -14,18 +14,17 @@ export struct ScreenQuadVertex {
     float u, v;
 };
 
-// A screen-space quad (two triangles spanning NDC) paired with a shader
-// whose vertex stage is always this same pass-through — every full-screen
+// A Shader whose vertex stage is always the same pass-through, plus the
+// screen-space quad (two triangles spanning NDC) it draws — every full-screen
 // pass (deferred lighting, post-processing, ...) differs only in its
 // fragment shader, so this bundles the shared vertex shader + quad geometry
-// once and takes just the fragment shader path per pass. Set any
-// pass-specific uniforms on `shader` (after shader.use()) before draw().
-export class ScreenQuad {
+// once and takes just the fragment shader path per pass. Like ComputeShader
+// adding dispatch(), it's used as a regular shader (use(), set*()) and then
+// draw() runs the pass.
+export class ScreenQuad : public Shader {
 public:
-    Shader shader;
-
     explicit ScreenQuad(const std::string& fragmentPath)
-        : shader(vertexShaderPath, fragmentPath),
+        : Shader(vertexShaderPath, fragmentPath),
           vertexBuffer(vertices, indices, std::vector<VertexAttribute>{
               {0, 2, offsetof(ScreenQuadVertex, x)},
               {1, 2, offsetof(ScreenQuadVertex, u)},

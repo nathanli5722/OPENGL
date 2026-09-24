@@ -12,24 +12,23 @@ in VS_OUT {
 out vec3 WorldPos;
 out vec3 Normal;
 out vec2 TexCoords;
-// Integer varyings must be flat, and voxelize.frag declares them `flat in` —
+// Integer varyings must be flat, and voxelize.frag declares it `flat in` —
 // a mismatched interpolation qualifier is a link error.
-flat out int layer;
 flat out int mainAxis;
 
 uniform vec3 voxelBoundsMin;
 uniform vec3 voxelBoundsMax;
-uniform int voxelResolution;
 
 // Single-pass dominant-axis voxelization (Crassin & Green, "Octree-Based
 // Sparse Voxelization of Alpha Tested Foliage"). Each triangle is projected
 // down whichever world axis its face normal is most aligned with, so it
 // rasterizes into the most voxels instead of degenerating to a sliver when
-// viewed edge-on down a fixed axis. The chosen axis and slice index travel to
-// the fragment shader as flat varyings rather than via gl_Layer: nothing is
-// attached to the framebuffer, so there are no layers to route to — the
-// fragment shader reassembles the ivec3 itself and writes through
-// imageAtomicAdd.
+// viewed edge-on down a fixed axis. The chosen axis travels to the fragment
+// shader as a flat varying, and the position along it rides in gl_Position.z
+// so the rasterizer interpolates a per-fragment slice (gl_FragCoord.z) — a
+// triangle sloped across several slices stays sloped instead of collapsing
+// into one. Nothing is attached to the framebuffer, so the fragment shader
+// reassembles the ivec3 itself and writes through imageAtomicAdd.
 void main()
 {
     //find face normal (vertex normals aren't accurate)
@@ -41,35 +40,26 @@ void main()
     else if (faceNormal.z > faceNormal.x && faceNormal.z > faceNormal.y)
         axis = 2;
 
-    //normalize to min and max, then change to -1, 1. Done for all three up
-    //front because the emit loop needs the flattened xy and the slice index
-    //needs the triangle's centroid along the dominant axis.
-    vec3 gridPos[3];
-    for (int i = 0; i < 3; i++)
-        gridPos[i] = (gs_in[i].WorldPos - voxelBoundsMin)
-                         / (voxelBoundsMax - voxelBoundsMin) * 2.0 - 1.0;
-
-    // One slice for the whole triangle, not one per vertex: `layer` is flat,
-    // so a per-vertex value would collapse to the provoking vertex's anyway.
-    float centroidAxis =
-        (gridPos[0][axis] + gridPos[1][axis] + gridPos[2][axis]) / 3.0;
-
-    mainAxis = axis;
-    layer = clamp(int((centroidAxis * 0.5 + 0.5) * voxelResolution),
-                  0, voxelResolution - 1);
-
     for (int i = 0; i < 3; i++) {
+        //normalize to min and max, then change to -1, 1
+        vec3 gridPos = (gs_in[i].WorldPos - voxelBoundsMin)
+                           / (voxelBoundsMax - voxelBoundsMin) * 2.0 - 1.0;
         vec2 flatPos;
 
         if (axis == 0)
-            flatPos = gridPos[i].yz;
+            flatPos = gridPos.yz;
         else if (axis == 1)
-            flatPos = gridPos[i].xz;
+            flatPos = gridPos.xz;
         else
-            flatPos = gridPos[i].xy;
+            flatPos = gridPos.xy;
 
-        gl_Position = vec4(flatPos, 0.0, 1.0);
+        // Depth along the dominant axis. Already in [-1, 1], so the default
+        // glDepthRange maps it to gl_FragCoord.z in [0, 1] = grid fraction.
+        gl_Position = vec4(flatPos, gridPos[axis], 1.0);
 
+        // Every output is undefined after EmitVertex(), flat ones included,
+        // so mainAxis is rewritten per vertex rather than once up front.
+        mainAxis = axis;
         WorldPos = gs_in[i].WorldPos;
         Normal = gs_in[i].Normal;
         TexCoords = gs_in[i].TexCoords;

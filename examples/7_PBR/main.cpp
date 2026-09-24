@@ -98,17 +98,17 @@ int main() {
             gBuffer.bindForReading();
             shadowMap.bindForReading(4);
 
-            lighting_shader.shader.use();
-            lighting_shader.shader.setInt("gPosition", 0);
-            lighting_shader.shader.setInt("gNormal", 1);
-            lighting_shader.shader.setInt("gAlbedo", 2);
-            lighting_shader.shader.setInt("gMetallicRoughness", 3);
-            lighting_shader.shader.setInt("shadowMap", 4);
-            lighting_shader.shader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
-            lighting_shader.shader.setVec3("viewPos", camera.position);
-            dirLight.setUniforms(lighting_shader.shader, "dirLight");
-            lighting_shader.shader.setVec3("ambientColor", glm::vec3(1.0f));
-            lighting_shader.shader.setFloat("ambientIntensity", 0.2f);
+            lighting_shader.use();
+            lighting_shader.setInt("gPosition", 0);
+            lighting_shader.setInt("gNormal", 1);
+            lighting_shader.setInt("gAlbedo", 2);
+            lighting_shader.setInt("gMetallicRoughness", 3);
+            lighting_shader.setInt("shadowMap", 4);
+            lighting_shader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
+            lighting_shader.setVec3("viewPos", camera.position);
+            dirLight.setUniforms(lighting_shader, "dirLight");
+            lighting_shader.setVec3("ambientColor", glm::vec3(1.0f));
+            lighting_shader.setFloat("ambientIntensity", 0.2f);
 
             lighting_shader.draw();
         });

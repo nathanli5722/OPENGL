@@ -24,6 +24,9 @@ public:
     DirectionalLight(glm::vec3 direction, glm::vec3 color = glm::vec3(1.0f), float intensity = 1.0f)
         : direction(glm::normalize(direction)), color(color), intensity(intensity)
     {}
+    DirectionalLight(glm::vec3 direction, float intensity)
+        : direction(glm::normalize(direction)), color(glm::vec3(1.0f)), intensity(intensity)
+    {}
 
     // Builds the view+projection matrix a shadow pass renders the scene
     // from: an orthographic box sized to just cover a scene bounding

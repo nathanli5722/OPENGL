@@ -66,17 +66,17 @@ int main() {
             window.bindDefault();
             gBuffer.bindForReading();
 
-            lighting_shader.shader.use();
-            lighting_shader.shader.setInt("gPosition", 0);
-            lighting_shader.shader.setInt("gNormal", 1);
-            lighting_shader.shader.setInt("gAlbedoSpec", 2);
-            lighting_shader.shader.setVec3("viewPos", camera.position);
-            lighting_shader.shader.setVec3("dirLight.direction", glm::normalize(glm::vec3(1.0f, 1.0f, 1.0f)));
-            lighting_shader.shader.setVec3("dirLight.color", glm::vec3(1.0f, 1.0f, 1.0f));
-            lighting_shader.shader.setFloat("dirLight.intensity", 1.0f);
-            lighting_shader.shader.setVec3("ambientColor", glm::vec3(0.1f, 0.1f, 0.1f));
-            lighting_shader.shader.setFloat("ambientIntensity", 1.0f);
-            lighting_shader.shader.setFloat("shininess", 32.0f);
+            lighting_shader.use();
+            lighting_shader.setInt("gPosition", 0);
+            lighting_shader.setInt("gNormal", 1);
+            lighting_shader.setInt("gAlbedoSpec", 2);
+            lighting_shader.setVec3("viewPos", camera.position);
+            lighting_shader.setVec3("dirLight.direction", glm::normalize(glm::vec3(1.0f, 1.0f, 1.0f)));
+            lighting_shader.setVec3("dirLight.color", glm::vec3(1.0f, 1.0f, 1.0f));
+            lighting_shader.setFloat("dirLight.intensity", 1.0f);
+            lighting_shader.setVec3("ambientColor", glm::vec3(0.1f, 0.1f, 0.1f));
+            lighting_shader.setFloat("ambientIntensity", 1.0f);
+            lighting_shader.setFloat("shininess", 32.0f);
             
             lighting_shader.draw();
         });

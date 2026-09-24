@@ -6,8 +6,9 @@ in vec3 WorldPos;
 in vec3 Normal;
 in vec2 TexCoords;
 
-flat in int layer;
 flat in int mainAxis;
+
+uniform int voxelResolution;
 
 // Only the color channel is scaffolded here — a first-pass diffuse-only
 // voxel grid only needs albedo. Add emissive/metallic/roughness uniforms
@@ -16,6 +17,8 @@ flat in int mainAxis;
 
 uniform vec3 albedo;
 uniform bool hasAlbedoMap;
+uniform float metallic;
+uniform bool hasMetallicMap;
 
 struct DirLight {
     vec3 direction;
@@ -25,8 +28,6 @@ struct DirLight {
 
 uniform mat4 lightSpaceMatrix;
 uniform DirLight dirLight;
-uniform vec3 ambientColor;
-uniform float ambientIntensity;
 
 //model::draw  uses 0-4
 layout(binding = 0) uniform sampler2D albedoMap;
@@ -44,9 +45,12 @@ float calcShadow();
 //gets the voxel the fragment is in. gl_FragCoord.xy is already in window
 //coordinates — the viewport is voxelResolution wide and tall during this
 //pass, so it needs no remapping, just a truncation to the texel index.
+//gl_FragCoord.z is the [0, 1] position along the dominant axis (see
+//voxelize.geom), so it scales to the slice index.
 ivec3 getVoxelPos() {
   ivec3 voxelPos;
   ivec2 otherPos = ivec2(gl_FragCoord.xy);
+  int layer = clamp(int(gl_FragCoord.z * voxelResolution), 0, voxelResolution - 1);
   if (mainAxis == 0)
     voxelPos = ivec3(layer, otherPos);
   else if (mainAxis == 1)
@@ -63,18 +67,20 @@ ivec3 getVoxelPos() {
 void main()
 {
   vec3 color = hasAlbedoMap ? vec3(texture(albedoMap, TexCoords)) : albedo;
-  float metallic = texture(metallicMap, TexCoords).r;
+  // Only sample when the mesh actually has a map: otherwise unit 2 still holds
+  // whatever was bound last (last frame's G-buffer albedo), not a metallic map.
+  float metal = hasMetallicMap ? texture(metallicMap, TexCoords).r : metallic;
 
-  float kD = 1.0 - metallic; //no view vector
+  float kD = 1.0 - metal; //no view vector
   vec3 lambert = color / PI;
 
   float lit = 1.0 - calcShadow();
 
   vec3 result = kD * lambert * 
         dirLight.color * dirLight.intensity * 
-        lit * max(dot(Normal, dirLight.direction), 0.0);
+        lit * max(dot(normalize(Normal), dirLight.direction), 0.0);
 
-  //not necessary?
+  //not necessary
   FragColor = vec4(result, 1.0);
 
 
@@ -84,6 +90,7 @@ void main()
   // this voxel; aVoxel counts those fragments. A consumer recovers the average
   // color as rgb / (255 * count) — see the resolve pass.
   uvec3 fixedColor = uvec3(clamp(result, 0.0, 1.0) * 255.0);
+  //uvec3 fixedColor = uvec3(color * 255.0);
 
   imageAtomicAdd(rVoxel, fragVoxelPos, fixedColor.r);
   imageAtomicAdd(gVoxel, fragVoxelPos, fixedColor.g);
