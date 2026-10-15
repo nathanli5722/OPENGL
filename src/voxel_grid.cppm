@@ -1,5 +1,6 @@
 module;
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <stdexcept>
@@ -8,6 +9,8 @@ module;
 #include <glm/glm.hpp>
 
 export module voxel_grid;
+
+import shader;
 
 // The grid is two representations of the same volume, in sequence.
 //
@@ -20,19 +23,25 @@ export module voxel_grid;
 // Nothing downstream can trace those directly: integer textures cannot be
 // linearly filtered, and cone tracing needs trilinear samples across a mip
 // chain. So a compute pass resolves the four accumulators into a single
-// filterable GL_RGBA16F volume, which is what gets mipmapped and sampled.
-// That texture stores premultiplied radiance — rgb = average color, a = 1
-// for any occupied voxel — so that a box-filtered mip's alpha is the
-// fraction of covered subvoxels and rgb is the coverage-weighted color sum,
-// which is exactly the form front-to-back cone accumulation expects.
+// filterable GL_RGBA16F volume. That texture stores premultiplied radiance —
+// rgb = average color, a = 1 for any occupied voxel — which is the form
+// front-to-back cone accumulation expects.
+//
+// The coarser levels are not a mip chain of that volume. Box-filtering
+// opacity turns a one-voxel wall seen face-on translucent within a few
+// levels, so cones leak through walls. Instead there are six anisotropic
+// volumes (+X, -X, +Y, -Y, +Z, -Z), each at half the grid resolution with its
+// own full mip chain: level k of those is overall mip k + 1, built by
+// voxel_mip.comp compositing along its direction before averaging. The
+// isotropic volume is overall mip 0 for every direction.
 export class VoxelGrid {
 public:
     VoxelGrid(int resolution, glm::vec3 boundsMin, glm::vec3 boundsMax)
         : resolution(resolution), boundsMin(boundsMin), boundsMax(boundsMax),
           clearData(static_cast<std::size_t>(resolution) * resolution * resolution, 0u)
     {
-        if (resolution <= 0)
-            throw std::runtime_error("VoxelGrid resolution must be positive");
+        if (resolution < 2)
+            throw std::runtime_error("VoxelGrid resolution must be at least 2");
 
         // Accumulators: level 0 only, never sampled, only bound as images.
         glGenTextures(static_cast<GLsizei>(voxelTex.size()), voxelTex.data());
@@ -47,23 +56,31 @@ public:
             glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
         }
 
-        // Resolved radiance: the full mip chain is allocated up front by
-        // glTexStorage3D so glGenerateMipmap has levels to fill, and the
-        // trilinear min filter is what makes cone tracing's coarser-mip
-        // samples meaningful rather than point-sampled noise.
-        mipLevels = 1;
-        for (int size = resolution; size > 1; size >>= 1)
-            ++mipLevels;
-
+        // Resolved radiance: a single level — everything coarser lives in the
+        // anisotropic volumes below. Linear filtering still matters for cone
+        // tracing's first few samples, which read it between voxel centers.
         glGenTextures(1, &radianceTex);
         glBindTexture(GL_TEXTURE_3D, radianceTex);
-        glTexStorage3D(GL_TEXTURE_3D, mipLevels, GL_RGBA16F,
+        glTexStorage3D(GL_TEXTURE_3D, 1, GL_RGBA16F,
                        resolution, resolution, resolution);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        setSampledParams();
+
+        // Anisotropic volumes: half resolution, full mip chain from there
+        // down to 1^3 (the same floor-halving rule glTexStorage3D uses).
+        // Trilinear filtering blends between their levels as the cone widens.
+        anisoResolution = resolution / 2;
+        anisoLevels = 1;
+        for (int size = anisoResolution; size > 1; size >>= 1)
+            ++anisoLevels;
+
+        glGenTextures(static_cast<GLsizei>(anisoTex.size()), anisoTex.data());
+        for (const auto texture : anisoTex) {
+            glBindTexture(GL_TEXTURE_3D, texture);
+            glTexStorage3D(GL_TEXTURE_3D, anisoLevels, GL_RGBA16F,
+                           anisoResolution, anisoResolution, anisoResolution);
+            setSampledParams();
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        }
         glBindTexture(GL_TEXTURE_3D, 0);
 
         // A framebuffer with no attachments (ARB_framebuffer_no_attachments,
@@ -92,6 +109,7 @@ public:
     ~VoxelGrid() {
         glDeleteTextures(static_cast<GLsizei>(voxelTex.size()), voxelTex.data());
         glDeleteTextures(1, &radianceTex);
+        glDeleteTextures(static_cast<GLsizei>(anisoTex.size()), anisoTex.data());
         glDeleteFramebuffers(1, &fbo);
     }
 
@@ -100,12 +118,14 @@ public:
 
     VoxelGrid(VoxelGrid&& other) noexcept
         : voxelTex(other.voxelTex), radianceTex(other.radianceTex),
-          fbo(other.fbo), resolution(other.resolution), mipLevels(other.mipLevels),
+          anisoTex(other.anisoTex), fbo(other.fbo), resolution(other.resolution),
+          anisoResolution(other.anisoResolution), anisoLevels(other.anisoLevels),
           boundsMin(other.boundsMin), boundsMax(other.boundsMax),
           clearData(std::move(other.clearData))
     {
         other.voxelTex.fill(0);
         other.radianceTex = 0;
+        other.anisoTex.fill(0);
         other.fbo = 0;
     }
 
@@ -113,17 +133,21 @@ public:
         if (this != &other) {
             glDeleteTextures(static_cast<GLsizei>(voxelTex.size()), voxelTex.data());
             glDeleteTextures(1, &radianceTex);
+            glDeleteTextures(static_cast<GLsizei>(anisoTex.size()), anisoTex.data());
             glDeleteFramebuffers(1, &fbo);
             voxelTex = other.voxelTex;
             radianceTex = other.radianceTex;
+            anisoTex = other.anisoTex;
             fbo = other.fbo;
             resolution = other.resolution;
-            mipLevels = other.mipLevels;
+            anisoResolution = other.anisoResolution;
+            anisoLevels = other.anisoLevels;
             boundsMin = other.boundsMin;
             boundsMax = other.boundsMax;
             clearData = std::move(other.clearData);
             other.voxelTex.fill(0);
             other.radianceTex = 0;
+            other.anisoTex.fill(0);
             other.fbo = 0;
         }
         return *this;
@@ -166,21 +190,47 @@ public:
                            radianceTex, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
     }
 
-    // Mips are built from the resolved RGBA16F volume, never from the integer
-    // accumulators — glGenerateMipmap on an integer format is not portable and
-    // the result could not be filtered anyway.
-    void generateMips() const {
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
-        glBindTexture(GL_TEXTURE_3D, radianceTex);
-        glGenerateMipmap(GL_TEXTURE_3D);
-        glBindTexture(GL_TEXTURE_3D, 0);
+    // Fills the anisotropic volumes with voxel_mip.comp, one dispatch per
+    // (level, direction): level 0 of every direction reads the resolved
+    // isotropic volume, each later level reads the previous level of its own
+    // direction. The barrier inside the loop makes each level's image stores
+    // visible to the next level's loads; the final one covers the samplers
+    // that cone tracing reads through.
+    void generateMips(const ComputeShader& mipShader) const {
+        mipShader.use();
+        for (int level = 0; level < anisoLevels; ++level) {
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            int dstResolution = std::max(1, anisoResolution >> level);
+            mipShader.setInt("dstResolution", dstResolution);
+            unsigned int groups = ComputeShader::groupCount(dstResolution, 8);
+
+            for (int dir = 0; dir < static_cast<int>(anisoTex.size()); ++dir) {
+                unsigned int src = level == 0 ? radianceTex : anisoTex[dir];
+                int srcLevel = level == 0 ? 0 : level - 1;
+                glBindImageTexture(0, src, srcLevel, GL_TRUE, 0,
+                                   GL_READ_ONLY, GL_RGBA16F);
+                glBindImageTexture(1, anisoTex[dir], level, GL_TRUE, 0,
+                                   GL_WRITE_ONLY, GL_RGBA16F);
+                mipShader.setInt("axis", dir / 2);
+                mipShader.setInt("dirSign", dir % 2 == 0 ? 1 : -1);
+                mipShader.dispatch(groups, groups, groups);
+            }
+        }
+        glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
     }
 
-    // Binds the resolved radiance volume as a single sampler3D — this is what
-    // cone tracing and the debug raymarch consume.
+    // Binds the resolved isotropic volume to textureUnit and the six
+    // anisotropic volumes, in +X, -X, +Y, -Y, +Z, -Z order, to the six units
+    // after it — matching a `layout(binding = textureUnit + 1) uniform
+    // sampler3D voxelAniso[6]` declaration. The debug raymarch only reads the
+    // first; cone tracing reads all seven.
     void bindForReading(unsigned int textureUnit) const {
         glActiveTexture(GL_TEXTURE0 + textureUnit);
         glBindTexture(GL_TEXTURE_3D, radianceTex);
+        for (unsigned int i = 0; i < anisoTex.size(); ++i) {
+            glActiveTexture(GL_TEXTURE0 + textureUnit + 1 + i);
+            glBindTexture(GL_TEXTURE_3D, anisoTex[i]);
+        }
     }
 
     // Deliberately leaves the viewport at the grid's resolution. Every pass
@@ -196,16 +246,29 @@ public:
 
     unsigned int textureId() const { return radianceTex; }
     int getResolution() const { return resolution; }
-    int getMipLevels() const { return mipLevels; }
+    int getAnisoLevels() const { return anisoLevels; }
     glm::vec3 getBoundsMin() const { return boundsMin; }
     glm::vec3 getBoundsMax() const { return boundsMax; }
 
 private:
+    // Filtering/wrap shared by every sampled volume, applied to whichever one
+    // is bound. Clamp keeps samples at the grid's edge from wrapping around
+    // to the opposite wall.
+    static void setSampledParams() {
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    }
+
     std::array<unsigned int, 4> voxelTex{};
     unsigned int radianceTex = 0;
+    std::array<unsigned int, 6> anisoTex{};
     unsigned int fbo = 0;
     int resolution = 0;
-    int mipLevels = 1;
+    int anisoResolution = 0;
+    int anisoLevels = 1;
     glm::vec3 boundsMin{0.0f};
     glm::vec3 boundsMax{0.0f};
     std::vector<std::uint32_t> clearData;

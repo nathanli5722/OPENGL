@@ -22,12 +22,16 @@ uniform DirLight dirLight;
 uniform vec3 ambientColor;
 uniform float ambientIntensity;
 
-// Voxel cone tracing indirect lighting. voxelGrid is the VoxelGrid texture
-// from src/voxel_grid.cppm (mipmapped RGBA16F: rgb = averaged color, a =
-// averaged opacity per voxel), bound for reading in main.cpp. Bounds/
-// resolution let traceCone() convert between world space and the grid's
-// [0,1]^3 texture space.
+// Voxel cone tracing indirect lighting, from src/voxel_grid.cppm's volumes
+// (premultiplied RGBA16F: rgb = color * opacity, a = opacity), bound for
+// reading in main.cpp. voxelGrid is the full-resolution isotropic level
+// (overall mip 0); voxelAniso holds the coarser levels as six half-resolution
+// directional volumes in +X, -X, +Y, -Y, +Z, -Z order, where voxelAniso[i]
+// level k is overall mip k + 1 as seen by a cone travelling along that
+// direction. Bounds/resolution let traceCone() convert between world space and
+// the grid's [0,1]^3 texture space.
 layout(binding = 6) uniform sampler3D voxelGrid;
+layout(binding = 7) uniform sampler3D voxelAniso[6];
 uniform vec3 voxelGridBoundsMin;
 uniform vec3 voxelGridBoundsMax;
 uniform float voxelGridResolution;
@@ -36,6 +40,32 @@ uniform float sceneRadius;
 
 #define STEP_FACTOR 0.5
 #define SKY_COLOR (vec3(0.6, 0.7, 0.9) * 0.2)
+
+// Opacity/radiance of the grid at an overall mip level, as seen travelling
+// along direction. Each axis picks the volume facing the cone (by the sign of
+// that component) and the three are blended by the squared components, which
+// sum to 1 for a unit direction. Sampler array indices must be constant (the
+// per-pixel sign is not dynamically uniform), hence the ternaries.
+vec4 sampleAniso(vec3 uvw, float lod, vec3 direction) {
+    vec3 w = direction * direction;
+    vec4 x = direction.x > 0.0 ? textureLod(voxelAniso[0], uvw, lod)
+                               : textureLod(voxelAniso[1], uvw, lod);
+    vec4 y = direction.y > 0.0 ? textureLod(voxelAniso[2], uvw, lod)
+                               : textureLod(voxelAniso[3], uvw, lod);
+    vec4 z = direction.z > 0.0 ? textureLod(voxelAniso[4], uvw, lod)
+                               : textureLod(voxelAniso[5], uvw, lod);
+    return w.x * x + w.y * y + w.z * z;
+}
+
+// Overall mip 0 is the isotropic volume; everything coarser is directional,
+// offset by one level. Between 0 and 1 the two are blended so the switch
+// does not show as a seam where cones cross one voxel in diameter.
+vec4 sampleVoxels(vec3 uvw, float mip, vec3 direction) {
+    if (mip >= 1.0)
+        return sampleAniso(uvw, mip - 1.0, direction);
+    return mix(textureLod(voxelGrid, uvw, 0.0),
+               sampleAniso(uvw, 0.0, direction), mip);
+}
 
 // traces a cone, 4th component is for ao
 vec4 traceCone(vec3 origin, vec3 direction, vec3 normal, float aperture) {
@@ -60,7 +90,7 @@ vec4 traceCone(vec3 origin, vec3 direction, vec3 normal, float aperture) {
         if (any(lessThan(uvw, vec3(0.0))) || 
             any(greaterThan(uvw, vec3(1.0)))) 
             break;  // left the grid
-        temp = textureLod(voxelGrid, uvw, mip);
+        temp = sampleVoxels(uvw, mip, direction);
 
         color += (1.0 - color.a) * temp;
 
@@ -71,7 +101,7 @@ vec4 traceCone(vec3 origin, vec3 direction, vec3 normal, float aperture) {
         dist += diameter * STEP_FACTOR;
     }
 
-    color.rgb += (1.0 - color.a) * SKY_COLOR;  
+    //color.rgb += (1.0 - color.a) * SKY_COLOR;  
 
     return vec4(color.rgb, ao);
 }
@@ -85,7 +115,8 @@ vec4 traceHemisphere(vec3 pos, vec3 normal) {
     vec3 B = cross(normal, T);
 
     const float aperture = radians(30.0);   // half-angle
-    const float theta    = radians(60.0);   // tilt of side cones
+    // tilt of side cones.
+    const float theta    = radians(60.0);
 
     //normal facing cone
     vec4 result = 0.25 * traceCone(pos, normal, normal, aperture);
@@ -200,8 +231,10 @@ void main()
     vec3 radiance = dirLight.color * dirLight.intensity * lit;
     vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
-    //ambient
-    vec3 ambient = kD * albedo * vec3(traceHemisphere(position, N));
+    //ambient. gi.a is the cone-weighted occlusion (0 = open, 1 = fully
+    //blocked nearby), so 1 - gi.a darkens corners and crevices
+    vec4 gi = traceHemisphere(position, N);
+    vec3 ambient = kD * albedo * gi.rgb * (1.0 - gi.a);
 
     vec3 color = ambient + Lo;
     //linear to srgb

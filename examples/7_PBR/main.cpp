@@ -35,7 +35,11 @@ int main() {
         Shader deferred_shader(DEMO_DIR "/vertex.vert", DEMO_DIR "/deferred-fragment.frag");
         ScreenQuad lighting_shader(DEMO_DIR "/lighting.frag");
         Shader shadow_shader(DEMO_DIR "/shadow_map.vert", DEMO_DIR "/shadow_map.frag");
-        DirectionalLight dirLight(glm::vec3(0.2f, 1.0f, 0.1f));
+        // Intensity well above 1: the PBR diffuse term is albedo/PI, so a
+        // 1.0 sun only adds ~0.32*albedo, barely more than the ambient term,
+        // and shadowed vs lit surfaces end up looking the same. The lighting
+        // pass tone maps, so values above 1 don't clip.
+        DirectionalLight dirLight(glm::vec3(0.2f, 1.0f, 0.1f), 4.0f);
 
         ShadowMap shadowMap(2048);
 
@@ -108,7 +112,9 @@ int main() {
             lighting_shader.setVec3("viewPos", camera.position);
             dirLight.setUniforms(lighting_shader, "dirLight");
             lighting_shader.setVec3("ambientColor", glm::vec3(1.0f));
-            lighting_shader.setFloat("ambientIntensity", 0.2f);
+            // Ambient isn't shadowed, so it sets how bright shadows are —
+            // kept low so the shadow map's occlusion actually reads.
+            lighting_shader.setFloat("ambientIntensity", 0.05f);
 
             lighting_shader.draw();
         });

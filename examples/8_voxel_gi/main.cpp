@@ -83,10 +83,11 @@ void voxelizeScene(const VoxelGrid& voxelGrid, const Shader& voxelizeShader,
 }
 
 // Resolve pass: average the integer accumulators into the filterable RGBA16F
-// volume, then build its mip chain. This has to be a compute dispatch rather
-// than more rasterization — there is no triangle whose fragments cover every
-// voxel, and each voxel's result depends only on itself.
-void resolveVoxels(const VoxelGrid& voxelGrid, const ComputeShader& resolveShader) {
+// volume, then build the anisotropic levels from it. This has to be a compute
+// dispatch rather than more rasterization — there is no triangle whose
+// fragments cover every voxel, and each voxel's result depends only on itself.
+void resolveVoxels(const VoxelGrid& voxelGrid, const ComputeShader& resolveShader,
+                   const ComputeShader& mipShader) {
     resolveShader.use();
     resolveShader.setInt("voxelResolution", voxelGrid.getResolution());
     voxelGrid.bindForResolve(1);
@@ -94,7 +95,7 @@ void resolveVoxels(const VoxelGrid& voxelGrid, const ComputeShader& resolveShade
     unsigned int groups = ComputeShader::groupCount(voxelGrid.getResolution(), 8);
     resolveShader.dispatch(groups, groups, groups);
 
-    voxelGrid.generateMips();
+    voxelGrid.generateMips(mipShader);
 }
 
 // Raw raymarch of the voxel grid straight to the window, in place of the
@@ -179,10 +180,11 @@ int main() {
         Shader voxelize_shader(DEMO_DIR "/voxelize.vert", DEMO_DIR "/voxelize.frag",
                                 DEMO_DIR "/voxelize.geom");
         ComputeShader voxelResolveShader(DEMO_DIR "/voxel_resolve.comp");
+        ComputeShader voxelMipShader(DEMO_DIR "/voxel_mip.comp");
         ScreenQuad voxelDebugShader(DEMO_DIR "/voxel_debug.frag");
         DirectionalLight dirLight(glm::vec3(0.4f, 1.0f, 0.1f), 4.0f);
 
-        ShadowMap shadowMap(2048);
+        ShadowMap shadowMap(4096);
 
         Camera camera(glm::vec3(0.0f, 300.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f),
                       glm::vec3(0.0f, 1.0f, 0.0f), 45.0f, window.getAspect(),
@@ -196,11 +198,7 @@ int main() {
         GBuffer gBuffer(static_cast<int>(window.getWidth() * renderScale),
                         static_cast<int>(window.getHeight() * renderScale));
 
-        // 128^3 costs ~32MB for the four R32UI accumulators plus ~19MB for
-        // the resolved RGBA16F volume and its mips — a reasonable starting
-        // resolution for fast iteration. Bump toward 256^3 (8x that) once the
-        // pipeline is verified correct.
-        VoxelGrid voxelGrid(128, sceneCenter - glm::vec3(sceneRadius),
+        VoxelGrid voxelGrid(256, sceneCenter - glm::vec3(sceneRadius),
                                   sceneCenter + glm::vec3(sceneRadius));
 
         window.setInputCallback([&](GLFWwindow* w, float deltaTime) {
@@ -228,15 +226,9 @@ int main() {
             glm::mat4 lightSpaceMatrix = dirLight.getLightSpaceMatrix(sceneCenter, sceneRadius);
 
             renderShadowPass(shadowMap, shadow_shader, sceneModel, lightSpaceMatrix);
-
-            // TODO(you): Sponza is static, so voxelization + resolve only
-            // need to run once rather than every frame — gate them behind a
-            // `static bool voxelized = false` flag (or similar) once you've
-            // confirmed they're correct; brute-force "every frame" is fine
-            // while you're iterating on voxelize.geom/.frag.
             voxelizeScene(voxelGrid, voxelize_shader, sceneModel, dirLight,
                           shadowMap, lightSpaceMatrix);
-            resolveVoxels(voxelGrid, voxelResolveShader);
+            resolveVoxels(voxelGrid, voxelResolveShader, voxelMipShader);
 
             if (showVoxelDebug) {
                 renderVoxelDebug(window, voxelGrid, voxelDebugShader, camera);

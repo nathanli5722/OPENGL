@@ -1,8 +1,8 @@
 #version 430 core
 
 // Resolve pass: turns the four GL_R32UI voxelization accumulators into the one
-// filterable RGBA16F volume that gets mipmapped and cone-traced. One invocation
-// per voxel, 512 per workgroup.
+// filterable RGBA16F volume that voxel_mip.comp builds the anisotropic levels
+// from and cone tracing samples. One invocation per voxel, 512 per workgroup.
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 // Bindings 1..4 match voxelize.frag so the two passes agree on which volume is
@@ -16,12 +16,11 @@ layout(binding = 5, rgba16f) uniform writeonly image3D voxelRadiance;
 uniform int voxelResolution;
 
 // Alpha is 1 for any occupied voxel rather than something derived from the
-// sample count: it represents occupancy, and it is what makes the mip chain
-// work. glGenerateMipmap box-filters rgb and alpha independently, so at mip N
-// alpha becomes the fraction of covered subvoxels and rgb becomes the
-// coverage-weighted color sum — i.e. premultiplied radiance, the form that
-// front-to-back cone accumulation (`accum.rgb += (1 - accum.a) * voxel.rgb`)
-// wants, and from which `voxel.rgb / voxel.a` recovers the plain average color.
+// sample count: it represents occupancy. With rgb = color that makes each
+// voxel premultiplied radiance, the form front-to-back compositing
+// (`accum += (1 - accum.a) * voxel`) wants — both in voxel_mip.comp, which
+// composites along each direction to build the coarser levels, and in
+// traceCone — and from which `voxel.rgb / voxel.a` recovers the plain color.
 //
 // Empty voxels must be written too, not just skipped: glTexStorage3D leaves the
 // volume uninitialized, so a skipped voxel would keep whatever was there before.

@@ -1,0 +1,60 @@
+#version 430 core
+
+// Anisotropic mip pass (Crassin et al. 2011, "Interactive Indirect
+// Illumination Using Voxel Cone Tracing", §4): builds one level of one
+// directional volume from the level below it. One invocation per destination
+// voxel, i.e. per 2x2x2 source block.
+//
+// A plain box filter averages opacity, so a one-voxel-thick wall seen face-on
+// fades to alpha 1/2, 1/4, 1/8... per level even though it should block a cone
+// completely. Here the block is instead viewed along one axis: each of its four
+// 2-voxel columns along that axis is composited front to back (so a wall
+// crossing the column stays opaque), and only the four column results — the
+// part that genuinely *is* partial coverage — are averaged.
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// For the first directional level the source is the isotropic resolved volume
+// (shared by all six directions); after that it is the previous level of the
+// same directional volume.
+layout(binding = 0, rgba16f) uniform readonly image3D srcLevel;
+layout(binding = 1, rgba16f) uniform writeonly image3D dstLevel;
+
+uniform int dstResolution;
+// Axis the cone travels along (0 = x, 1 = y, 2 = z) and its sign: +1 means
+// the cone moves toward increasing coordinates, so the lower-index voxel of
+// each column is the one it enters first.
+uniform int axis;
+uniform int dirSign;
+
+void main()
+{
+    ivec3 pos = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(pos, ivec3(dstResolution))))
+        return;
+
+    ivec3 along = ivec3(0);
+    ivec3 u = ivec3(0);
+    ivec3 v = ivec3(0);
+    along[axis] = 1;
+    u[(axis + 1) % 3] = 1;
+    v[(axis + 2) % 3] = 1;
+
+    // Out-of-range loads (an odd-sized source's missing last row) return 0,
+    // which reads as empty space — the right answer at the grid's edge.
+    ivec3 base = pos * 2;
+    vec4 sum = vec4(0.0);
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            ivec3 p = base + i * u + j * v;
+            vec4 near = imageLoad(srcLevel, p);
+            vec4 far = imageLoad(srcLevel, p + along);
+            vec4 front = dirSign > 0 ? near : far;
+            vec4 back = dirSign > 0 ? far : near;
+            // Premultiplied front-to-back "over", same as traceCone's
+            // accumulation.
+            sum += front + (1.0 - front.a) * back;
+        }
+    }
+
+    imageStore(dstLevel, pos, sum * 0.25);
+}

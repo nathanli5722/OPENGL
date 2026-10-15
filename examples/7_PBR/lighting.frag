@@ -129,6 +129,12 @@ void main()
     // more than bright ones, so anything dim collapses toward black rather
     // than just looking dim.
     vec3 color = ambient + Lo;
+    // ACES filmic tone map (Narkowicz's fit): the sun is brighter than 1.0
+    // (see main.cpp), so compress HDR values into 0..1 before gamma instead
+    // of clipping them. Chosen over Reinhard, whose curve lifts shadows and
+    // flattens contrast into a washed-out grey; ACES's toe keeps darks dark.
+    color = clamp((color * (2.51 * color + 0.03)) /
+                  (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
     color = pow(color, vec3(1.0 / 2.2));
 
     FragColor = vec4(color, 1.0);
