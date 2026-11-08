@@ -8,9 +8,9 @@ follows the path I took to learn real-time rendering.
 ![Voxel cone traced GI in Sponza](src/images/voxel_gi_final.png)
 
 > **About authorship.** This is a learning project, so it matters which parts I
-> wrote and understand and which parts were written by an AI assistant (Claude).
+> wrote and understand and which parts were written by an AI assistant.
 > In short: **I wrote the rendering techniques**: the lighting, shadow, PBR and
-> voxel GI shader code and the ideas behind them. **Claude wrote most of the C++
+> voxel GI shader code and the ideas behind them. **AI wrote most of the C++
 > infrastructure**: the module wrappers around GL objects, the build setup, the
 > asset loaders, several helper/debug shaders, and most of the long explanatory
 > comments. In addition, LearnOpenGL is an often used resource for this project
@@ -297,14 +297,14 @@ light darkened by that occlusion.
 | Voxelization design: dominant-axis projection, empty FBO + image atomics, 4-texture integer accumulation | `examples/8_voxel_gi/voxelize.geom`, `voxelize.frag` | **Me** |
 | Direct-light injection into voxels | `examples/8_voxel_gi/voxelize.frag` | **Me** |
 | Cone tracing, cone directions/weights, AO, final GI composition | `traceCone` / `traceHemisphere` / `main` in `examples/8_voxel_gi/lighting.frag` | **Me** |
-| Demo pass ordering and scene setup | `examples/*/main.cpp` | Claude with edits |
-| ACES tone map, roughness clamp, light/ambient intensity tuning | `examples/7_PBR/*` | Claude |
-| Anisotropic mip generation | `examples/8_voxel_gi/voxel_mip.comp`, `sampleAniso`/`sampleVoxels` in `lighting.frag` | Claude |
-| Voxel resolve pass | `examples/8_voxel_gi/voxel_resolve.comp` | Claude |
-| Voxel debug raymarcher (Amanatides & Woo grid traversal) | `examples/8_voxel_gi/voxel_debug.frag` | Claude |
-| All engine modules: `Window`, `VertexBuffer`, `Shader`/`ComputeShader`, `Camera`, `Texture`, OBJ/glTF loader, `GBuffer`, `ShadowMap`, `ScreenQuad`, `DirectionalLight`, `VoxelGrid` | `src/*.cppm` | Claude (small edits by me) |
-| Build system: CMake + C++20 modules, presets, single-header library setup | `CMakeLists.txt`, `CMakePresets.json`, `src/*_impl.cpp` | Claude |
-| Long-form explanatory comments throughout | everywhere | Claude |
+| Demo pass ordering and scene setup | `examples/*/main.cpp` | AI with edits |
+| ACES tone map, roughness clamp, light/ambient intensity tuning | `examples/7_PBR/*` | AI |
+| Anisotropic mip generation | `examples/8_voxel_gi/voxel_mip.comp`, `sampleAniso`/`sampleVoxels` in `lighting.frag` | AI |
+| Voxel resolve pass | `examples/8_voxel_gi/voxel_resolve.comp` | AI |
+| Voxel debug raymarcher (Amanatides & Woo grid traversal) | `examples/8_voxel_gi/voxel_debug.frag` | AI |
+| All engine modules: `Window`, `VertexBuffer`, `Shader`/`ComputeShader`, `Camera`, `Texture`, OBJ/glTF loader, `GBuffer`, `ShadowMap`, `ScreenQuad`, `DirectionalLight`, `VoxelGrid` | `src/*.cppm` | AI (small edits by me) |
+| Build system: CMake + C++20 modules, presets, single-header library setup | `CMakeLists.txt`, `CMakePresets.json`, `src/*_impl.cpp` | AI |
+| Long-form explanatory comments throughout | everywhere | AI |
 
 I did not write the GL resource-management code (RAII wrappers, move semantics, memory barriers), and I only understand it at a high level.
 
@@ -361,7 +361,7 @@ executables can be run from any directory.
 - **No specular cone.** Only diffuse indirect light is traced. Glossy
   reflections would need one narrow cone along the reflection direction.
 
-Planned techniques: exposure, screen-space reflections, and ray tracing.
+Planned techniques: Ray tracing.
 
 ---
 
@@ -384,4 +384,4 @@ Planned techniques: exposure, screen-space reflections, and ray tracing.
   [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader),
   [tinygltf](https://github.com/syoyo/tinygltf).
 - Infrastructure and parts of the code written with
-  [Claude](https://claude.ai) (Anthropic). See [Authorship](#authorship).
+  [AI](https://AI.ai) (Anthropic). See [Authorship](#authorship).
